@@ -1,0 +1,296 @@
+// Prisma Schema for IdentiFind
+// PostgreSQL database with encryption-aware design
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")   // Pooled via PgBouncer — used at runtime
+  directUrl = env("DIRECT_URL")     // Direct connection — used only for migrations
+}
+
+// ─── Core Auth (NextAuth compatible) ────────────────────────────────────────
+
+model Account {
+  id                String  @id @default(cuid())
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text  // encrypted at application layer
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+  user              User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id           String   @id @default(cuid())
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model VerificationToken {
+  identifier String
+  token      String   @unique
+  expires    DateTime
+
+  @@unique([identifier, token])
+}
+
+// ─── Users ───────────────────────────────────────────────────────────────────
+
+model User {
+  id                  String    @id @default(cuid())
+  email               String?   @unique
+  emailVerified       DateTime?
+  name                String?
+  image               String?
+  passwordHash        String?   // bcrypt hash; null for OAuth-only users
+  mfaEnabled          Boolean   @default(false)
+  mfaSecret           String?   // encrypted TOTP secret
+  mfaBackupCodes      String?   // encrypted JSON array of backup codes
+  phoneNumber         String?   // encrypted
+  phoneVerified       Boolean   @default(false)
+  role                UserRole  @default(USER)
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+  lastLoginAt         DateTime?
+  failedLoginAttempts Int       @default(0)
+  lockedUntil         DateTime?
+
+  accounts        Account[]
+  sessions        Session[]
+  identityProfile IdentityProfile?
+  auditLogs       AuditLog[]
+
+  @@index([email])
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+// ─── Identity Profile ─────────────────────────────────────────────────────────
+
+model IdentityProfile {
+  id              String   @id @default(cuid())
+  userId          String   @unique
+  displayName     String?
+  riskScore       Int      @default(0)   // 0-100; higher = more risk
+  lastAuditedAt   DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  user             User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  socialAccounts   SocialAccount[]
+  securityFindings SecurityFinding[]
+  impersonations   ImpersonationAlert[]
+}
+
+// ─── Social Accounts ──────────────────────────────────────────────────────────
+
+model SocialAccount {
+  id                  String              @id @default(cuid())
+  identityProfileId   String
+  platform            SocialPlatform
+  platformUserId      String              // platform's internal user ID
+  username            String
+  profileUrl          String?
+  displayName         String?
+  avatarUrl           String?
+  encryptedAccessToken  String?           // AES-256 encrypted
+  encryptedRefreshToken String?           // AES-256 encrypted
+  tokenExpiresAt      DateTime?
+  scopes              String[]            // OAuth scopes granted
+  isActive            Boolean             @default(true)
+  connectedAt         DateTime            @default(now())
+  lastSyncedAt        DateTime?
+
+  // Security snapshot (refreshed on audit)
+  mfaEnabled          Boolean?
+  emailVerified       Boolean?
+  phoneVerified       Boolean?
+  accountCreatedAt    DateTime?
+  followersCount      Int?
+  isVerifiedBadge     Boolean?
+
+  identityProfile IdentityProfile   @relation(fields: [identityProfileId], references: [id], onDelete: Cascade)
+  securityChecks  SecurityCheck[]
+
+  @@unique([identityProfileId, platform, platformUserId])
+  @@index([identityProfileId])
+}
+
+enum SocialPlatform {
+  INSTAGRAM
+  TWITTER_X
+  FACEBOOK
+  LINKEDIN
+  TIKTOK
+  YOUTUBE
+  REDDIT
+  GITHUB
+  DISCORD
+}
+
+// ─── Security Checks ─────────────────────────────────────────────────────────
+
+model SecurityCheck {
+  id              String          @id @default(cuid())
+  socialAccountId String
+  checkType       SecurityCheckType
+  status          CheckStatus
+  severity        Severity
+  details         String?         @db.Text  // JSON-encoded metadata
+  remediationUrl  String?
+  checkedAt       DateTime        @default(now())
+  resolvedAt      DateTime?
+
+  socialAccount SocialAccount @relation(fields: [socialAccountId], references: [id], onDelete: Cascade)
+
+  @@index([socialAccountId])
+  @@index([checkedAt])
+}
+
+enum SecurityCheckType {
+  MFA_ENABLED
+  EMAIL_VERIFIED
+  PHONE_VERIFIED
+  RECOVERY_EMAIL_SET
+  ACTIVE_SESSIONS_REVIEW
+  CONNECTED_APPS_REVIEW
+  LOGIN_ACTIVITY_REVIEW
+  ACCOUNT_AGE
+  PRIVACY_SETTINGS
+  PASSWORD_STRENGTH
+}
+
+enum CheckStatus {
+  PASS
+  FAIL
+  WARNING
+  UNKNOWN
+}
+
+enum Severity {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+}
+
+// ─── Security Findings (aggregated across accounts) ───────────────────────────
+
+model SecurityFinding {
+  id                String          @id @default(cuid())
+  identityProfileId String
+  title             String
+  description       String          @db.Text
+  severity          Severity
+  category          FindingCategory
+  isResolved        Boolean         @default(false)
+  resolvedAt        DateTime?
+  createdAt         DateTime        @default(now())
+  updatedAt         DateTime        @updatedAt
+
+  identityProfile IdentityProfile @relation(fields: [identityProfileId], references: [id], onDelete: Cascade)
+
+  @@index([identityProfileId])
+  @@index([severity])
+}
+
+enum FindingCategory {
+  AUTHENTICATION
+  PRIVACY
+  ACCOUNT_SECURITY
+  DATA_EXPOSURE
+  IMPERSONATION
+  SUSPICIOUS_ACTIVITY
+}
+
+// ─── Impersonation Alerts ─────────────────────────────────────────────────────
+
+model ImpersonationAlert {
+  id                  String             @id @default(cuid())
+  identityProfileId   String
+  platform            SocialPlatform
+  suspectedUsername   String
+  suspectedProfileUrl String?
+  confidenceScore     Int                // 0-100
+  status              ImpersonationStatus @default(PENDING_REVIEW)
+  reportedAt          DateTime           @default(now())
+  reviewedAt          DateTime?
+  notes               String?
+
+  identityProfile IdentityProfile @relation(fields: [identityProfileId], references: [id], onDelete: Cascade)
+
+  @@index([identityProfileId])
+}
+
+enum ImpersonationStatus {
+  PENDING_REVIEW
+  CONFIRMED
+  DISMISSED
+  REPORTED_TO_PLATFORM
+}
+
+// ─── Data Broker Opt-Out Tracker ─────────────────────────────────────────────
+
+model DataBrokerOptOut {
+  id           String             @id @default(cuid())
+  userId       String
+  brokerName   String
+  status       BrokerOptOutStatus @default(NOT_STARTED)
+  submittedAt  DateTime?
+  confirmedAt  DateTime?
+  recheckAfter DateTime?
+  notes        String?
+  updatedAt    DateTime           @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, brokerName])
+  @@index([userId])
+}
+
+enum BrokerOptOutStatus {
+  NOT_STARTED
+  SUBMITTED
+  CONFIRMED
+  RECHECK
+}
+
+// ─── Audit Log ────────────────────────────────────────────────────────────────
+// Every access to sensitive data is logged for compliance
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String
+  action     String
+  resource   String
+  resourceId String?
+  ipAddress  String?  // encrypted
+  userAgent  String?
+  metadata   String?  @db.Text  // JSON
+  createdAt  DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([createdAt])
+  @@index([action])
+}
