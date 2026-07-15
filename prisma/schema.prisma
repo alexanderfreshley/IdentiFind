@@ -71,10 +71,11 @@ model User {
   failedLoginAttempts Int       @default(0)
   lockedUntil         DateTime?
 
-  accounts        Account[]
-  sessions        Session[]
-  identityProfile IdentityProfile?
-  auditLogs       AuditLog[]
+  accounts            Account[]
+  sessions            Session[]
+  identityProfile     IdentityProfile?
+  auditLogs           AuditLog[]
+  dataBrokerOptOuts   DataBrokerOptOut[]
 
   @@index([email])
 }
