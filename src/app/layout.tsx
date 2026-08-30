@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { Inter } from "next/font/google";
+import { Suspense } from "react";
 import "./globals.css";
 import { Providers } from "@/components/layout/Providers";
 import { Toaster } from "@/components/ui/toaster";
@@ -24,7 +25,9 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
-        <Providers>{children}</Providers>
+        <Suspense>
+          <Providers>{children}</Providers>
+        </Suspense>
         <Toaster />
       </body>
     </html>
