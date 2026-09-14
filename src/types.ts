@@ -1,4 +1,4 @@
-/**
+﻿/**
  * Shared application-wide types for IdentiFind.
  * These types mirror the Prisma SocialPlatform enum and related structures.
  */
@@ -77,10 +77,10 @@ export type CheckStatus = "PASS" | "FAIL" | "WARNING" | "UNKNOWN";
 export type CheckSeverity = "LOW" | "MEDIUM" | "HIGH" | "CRITICAL";
 
 export interface SecurityCheckResult {
-  checkName: string;
+  checkType: string;
   status: CheckStatus;
   severity: CheckSeverity;
-  message: string;
+  details?: string;
   remediationUrl?: string;
   platform?: string;
 }
